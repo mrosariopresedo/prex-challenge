@@ -12,6 +12,7 @@ Un **agente** multiplataforma (Windows/Linux) releva información del sistema op
 | Almacenamiento en JSON de texto plano `<IP de servidor>_<AAAA-MM-DD>.json` | `data/`, un archivo por IP y por día |
 | Endpoint de consulta por IP | `GET /api/v1/reports/<ip>` |
 | Código en GitHub, instrucciones y descripción | Este repositorio y este README |
+| Evidencia del contenedor corriendo y una consulta exitosa con curl | [Evidencia](#evidencia) |
 | *Deseable:* aplicación dockerizada | `api/Dockerfile` y `docker-compose.yml` |
 | *Deseable:* base de datos normalizada | SQLite en `data/inventory.db` (ver [Modelo de datos](#modelo-de-datos)) |
 
@@ -42,6 +43,20 @@ cd api && pytest -v
 ```
 
 Para relevar otra máquina de la red local, apuntar `--api` a la IP del host donde corre Docker (por ejemplo `http://192.168.1.10:5000`). La API también puede ejecutarse sin Docker: `cd api && pip install -r requirements.txt && AGENT_TOKEN=<token> python app.py`.
+
+## Evidencia
+
+**Contenedor corriendo en Docker Desktop**
+
+![Contenedor prex-challenge corriendo en Docker Desktop](docs/evidencia/1-docker-desktop.png)
+
+**`docker ps`, envío del agente (`201`) y consulta con `curl`**
+
+![docker ps, ejecución del agente y consulta con curl](docs/evidencia/2-docker-ps-agente-consulta.png)
+
+**Consulta resumida:** IP, sistema operativo, CPU, cantidad de procesos, usuarios con sesión y fecha de recepción en UTC.
+
+![Resumen de la consulta con curl](docs/evidencia/3-consulta-resumida.png)
 
 ## Arquitectura
 
@@ -88,7 +103,7 @@ Se guarda solo lo que pide la consigna, más lo indispensable para el funcionami
 | `received_at` | Fecha y hora de recepción, en UTC | API |
 | `source_addr` | IP de origen de la conexión, para detectar envíos a nombre de otro servidor | API |
 
-`source_addr` solo se registra, no se compara con `ip`, porque pueden diferir legítimamente (NAT, VPN, proxies, varias interfaces de red; con Docker Desktop la API ve el gateway de Docker, `172.17.0.1`).
+`source_addr` solo se registra, no se compara con `ip`, porque pueden diferir legítimamente (NAT, VPN, proxies, varias interfaces de red; con Docker la API ve la IP del gateway de la red de Docker, por ejemplo `172.19.0.1`).
 
 ## API
 
