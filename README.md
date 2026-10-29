@@ -42,8 +42,6 @@ pip install -r api/requirements-dev.txt
 cd api && pytest -v
 ```
 
-Para relevar otra máquina de la red local, apuntar `--api` a la IP del host donde corre Docker (por ejemplo `http://192.168.1.10:5000`). La API también puede ejecutarse sin Docker: `cd api && pip install -r requirements.txt && AGENT_TOKEN=<token> python app.py`.
-
 ## Evidencia
 
 **Contenedor corriendo en Docker Desktop**
@@ -85,7 +83,7 @@ flowchart LR
     API -- "guardado atómico" --> D
 ```
 
-El agente corre en cada equipo y **envía** los datos a la API (modelo *push*). Se eligió *push* en lugar de *pull* (que el servidor consulte a cada equipo) porque así solo los agentes inician conexiones, lo que simplifica el firewall cuando hay equipos detrás de NAT.
+El agente corre en cada equipo y **envía** los datos a la API (modelo *push*). Se eligió *push* en lugar de *pull* (que la API se conecte a cada equipo a pedirle los datos) porque así los equipos relevados no exponen ningún puerto: solo abren conexiones salientes hacia la API. Eso reduce la superficie de ataque de cada servidor y funciona aunque estén detrás de NAT o de un firewall que bloquee conexiones entrantes.
 
 > **Referencia:** es el patrón habitual de las herramientas de inventario y monitoreo. El modelo *push* equivale a los agentes "activos" de [Zabbix](https://www.zabbix.com/documentation/current/en/manual/concepts/agent) y al [Datadog Agent](https://docs.datadoghq.com/agent/); el *pull*, a los agentes "pasivos" de Zabbix y a [Prometheus](https://prometheus.io/docs/introduction/overview/).
 
