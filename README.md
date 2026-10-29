@@ -4,12 +4,29 @@ Solución con **Alternativa B (Local / Docker)**: un **agente** multiplataforma 
 
 ## Arquitectura
 
-```
-┌──────────────┐  POST /api/v1/reports (Bearer token)  ┌──────────────────────┐
-│ agent.py     │ ────────────────────────────────────▶ │ API Flask (Docker)   │
-│ psutil +     │                                        │  ├ data/<IP>_<fecha>.json
-│ platform     │ ◀──── GET /api/v1/reports/<ip> ─────── │  └ data/inventory.db (SQLite)
-└──────────────┘                                        └──────────────────────┘
+```mermaid
+flowchart LR
+    subgraph servidores["Servidores relevados"]
+        A1["Agente<br/>(Windows)"]
+        A2["Agente<br/>(Linux)"]
+    end
+
+    subgraph docker["Contenedor Docker"]
+        API["API Flask<br/>(gunicorn)"]
+    end
+
+    subgraph volumen["Volumen ./data"]
+        J[("JSON<br/>#lt;IP#gt;_#lt;AAAA-MM-DD#gt;.json")]
+        D[("SQLite<br/>inventory.db")]
+    end
+
+    OP["Operador<br/>(curl / Postman)"]
+
+    A1 -- "POST /api/v1/reports<br/>Bearer token" --> API
+    A2 -- "POST /api/v1/reports<br/>Bearer token" --> API
+    OP -- "GET /api/v1/reports/#lt;ip#gt;<br/>Bearer token" --> API
+    API -- "guardado atómico" --> J
+    API -- "guardado atómico" --> D
 ```
 
 El agente corre en cada equipo, recolecta los datos locales y los **envía** (modelo *push*) a la API, que los centraliza. Se eligió *push* en lugar de *pull* (que el servidor consulte a cada equipo) porque así el servidor no necesita conectarse a los equipos relevados: solo los agentes inician conexiones, y eso simplifica el firewall cuando hay equipos detrás de NAT.
