@@ -210,6 +210,8 @@ Limitación: un archivo y una base no comparten una transacción real. Si fallar
 
 **Token único compartido.** Todos los agentes usan el mismo token, que además habilita tanto el envío como la consulta. Si se compromete un servidor relevado, con su token se podría leer el inventario completo e inyectar relevamientos a nombre de cualquier IP; tampoco es posible revocar el acceso de un solo agente ni distinguirlos en los logs. La mitigación es una credencial por agente con permiso solo de escritura (token individual o mTLS) y una credencial separada para consultas.
 
+**Relevamientos perdidos si la API no está disponible.** El agente hace un único intento de envío: si la API está caída o la red falla, el relevamiento se pierde y el agente termina con error. La atomicidad del guardado no cubre este caso, porque el envío nunca llega al servidor. La mitigación tiene tres partes: reintentos con espera exponencial ante errores de red y respuestas 5xx (no ante 4xx, que no se resuelven reintentando); almacenamiento local de los envíos fallidos para reenviarlos en la siguiente ejecución; e idempotencia, mediante un identificador único por relevamiento, para que un reintento de un envío que sí llegó no genere duplicados.
+
 ## Tests
 
 La suite está en `api/tests/test_app.py` (40 casos, incluidos los parametrizados). Cada test arranca con un almacenamiento vacío y propio, en una carpeta temporal, así que nunca toca el `data/` real.
