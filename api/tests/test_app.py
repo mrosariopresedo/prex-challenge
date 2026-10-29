@@ -184,6 +184,19 @@ def test_consulta_devuelve_los_envios_agrupados_por_fecha(client, auth, payload)
     assert list(resp.get_json()["reports_by_date"]) == [hoy]
 
 
+def test_consulta_lee_de_la_base_y_coincide_con_el_json(api, client, auth, payload):
+    client.post("/api/v1/reports", json=payload, headers=auth)
+    guardado_en_json = json_del_dia(api, "10.0.0.5")
+
+    # Se borran los JSON: si la consulta los leyera, ya no encontraria nada
+    for f in api.DATA_DIR.glob("*.json"):
+        f.unlink()
+    resp = client.get("/api/v1/reports/10.0.0.5", headers=auth)
+
+    assert resp.status_code == 200
+    assert resp.get_json()["reports_by_date"][hoy_utc()] == guardado_en_json
+
+
 def test_consulta_filtrando_por_fecha(client, auth, payload):
     client.post("/api/v1/reports", json=payload, headers=auth)
     hoy = hoy_utc()

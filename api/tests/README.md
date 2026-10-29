@@ -1,6 +1,6 @@
 # Tests de la API
 
-La suite está en `test_app.py` (40 casos, incluidos los parametrizados). Cada test arranca con un almacenamiento vacío y propio, en una carpeta temporal, así que nunca toca el `data/` real.
+La suite está en `test_app.py` (41 casos, incluidos los parametrizados). Cada test arranca con un almacenamiento vacío y propio, en una carpeta temporal, así que nunca toca el `data/` real.
 
 ```bash
 pip install -r api/requirements-dev.txt
@@ -29,6 +29,7 @@ cd api && pytest -v
 | Test | Qué verifica |
 |---|---|
 | `test_consulta_devuelve_los_envios_agrupados_por_fecha` | La consulta devuelve los envíos de la IP agrupados por fecha |
+| `test_consulta_lee_de_la_base_y_coincide_con_el_json` | La consulta responde desde la base (funciona aun borrando los JSON) y devuelve exactamente lo mismo que quedó guardado en el JSON |
 | `test_consulta_filtrando_por_fecha` | El filtro `?date=` devuelve solo esa fecha |
 | `test_consulta_sin_token_devuelve_401` | La consulta también exige token |
 | `test_ip_sin_datos_devuelve_404` | Una IP sin relevamientos da 404 |

@@ -101,14 +101,14 @@ Se guarda solo lo que pide la consigna, más lo indispensable para el funcionami
 | `received_at` | Fecha y hora de recepción, en UTC | API |
 | `source_addr` | IP de origen de la conexión, para detectar envíos a nombre de otro servidor | API |
 
-`source_addr` solo se registra, no se compara con `ip`, porque pueden diferir legítimamente (NAT, VPN, proxies, varias interfaces de red; con Docker la API ve la IP del gateway de la red de Docker, por ejemplo `172.19.0.1`).
+`source_addr` se guarda como referencia, pero no se usa para rechazar envíos: es normal que no coincida con la IP que informa el agente, por ejemplo cuando la conexión pasa por un router, una VPN o la red interna de Docker.
 
 ## API
 
 | Método | Endpoint | Descripción |
 |---|---|---|
 | `POST` | `/api/v1/reports` | Recibe el relevamiento del agente y lo almacena |
-| `GET` | `/api/v1/reports/<ip>` | Devuelve los relevamientos de una IP, agrupados por fecha (opcional `?date=AAAA-MM-DD`) |
+| `GET` | `/api/v1/reports/<ip>` | Devuelve los relevamientos de una IP desde la base de datos, agrupados por fecha (opcional `?date=AAAA-MM-DD`) |
 | `GET` | `/health` | Estado del servicio |
 
 Los errores siguen el estándar **Problem Details (RFC 9457)**, con `Content-Type: application/problem+json` y mensajes en inglés, por convención en APIs HTTP:
@@ -178,9 +178,14 @@ Las claves foráneas se hacen cumplir con `PRAGMA foreign_keys = ON` (SQLite no 
 
 **SQLite, y no MongoDB.** SQLite viene incluida en Python, no requiere un servidor aparte y es un único archivo en el mismo volumen que los JSON. Se descartó MongoDB porque la copia fiel de cada documento ya la cubren los JSON, los datos tienen relaciones estables que se modelan mejor en una base relacional, y las consultas de mayor valor cruzan servidores (por ejemplo, en qué servidores corre un proceso), algo simple en SQL.
 
-*Límite de escala:* SQLite admite una escritura a la vez. Con 5.000 servidores reportando cada 5 minutos (~17 envíos por segundo, ~430 millones de filas de procesos por día, JSON de ~6,6 MB diarios por servidor reescritos en cada envío) se evolucionaría a PostgreSQL, una cola de mensajes para absorber picos y una política de retención con archivos de solo agregado (JSON Lines). Al usar SQL estándar, el modelo se migra casi sin cambios.
+*Límite de escala:* SQLite admite una escritura a la vez, lo que alcanza para el volumen de este challenge. En un escenario hipotético de 5.000 servidores reportando cada 5 minutos llegarían unos 17 envíos por segundo y la base sumaría cientos de millones de filas por día. Para esa escala:
+- Se cambiaría a **PostgreSQL**, que admite muchas escrituras a la vez. Como el modelo usa SQL estándar, se migra casi sin cambios.
+- Se agregaría una **cola intermedia** que reciba los envíos y los vaya guardando a su ritmo, para que un pico de tráfico no sature la base.
+- Se definiría **cuánto tiempo se conservan los datos**, eliminando los más antiguos para que el almacenamiento no crezca sin límite.
 
-**Guardado atómico de JSON y base.** Para que nunca quede uno guardado sin el otro, todo ocurre dentro de una transacción: `BEGIN IMMEDIATE` toma el lock de escritura, el JSON nuevo se escribe en un temporal y se insertan las filas, `os.replace` reemplaza el archivo de forma atómica y recién entonces se hace `COMMIT`. Ante cualquier falla se hace `ROLLBACK` y se restaura el JSON anterior. El lock también evita que dos workers de gunicorn se pisen el JSON del día. *Limitación:* si fallaran el `COMMIT` y también la restauración del archivo, quedarían desincronizados; es un caso muy improbable.
+**La consulta lee de la base de datos.** El JSON cumple el requisito de la consigna y conserva una copia legible de cada envío; la base es la que responde las consultas, porque permite buscar por IP y por fecha usando índices en lugar de recorrer archivos. Las dos tienen siempre el mismo contenido, gracias al guardado atómico.
+
+**Guardado atómico de JSON y base.** Para que nunca quede uno guardado sin el otro, todo ocurre dentro de una transacción: `BEGIN IMMEDIATE` toma el lock de escritura, el JSON nuevo se escribe en un temporal y se insertan las filas, `os.replace` reemplaza el archivo de forma atómica y recién entonces se hace `COMMIT`. Ante cualquier falla se hace `ROLLBACK` y se restaura el JSON anterior. El lock también evita que dos workers de gunicorn se pisen el JSON del día.
 
 **Límite de 5 MB por request.** Flask no limita el tamaño del body, y un envío desmedido podría agotar memoria o disco. Un relevamiento real medido (318 procesos) ocupa ~23 KB, así que 5 MB deja un margen de unos 70.000 procesos.
 
@@ -190,11 +195,11 @@ Las claves foráneas se hacen cumplir con `PRAGMA foreign_keys = ON` (SQLite no 
 
 **Ejecución del agente bajo demanda.** Cada ejecución releva y envía una vez. En producción se programaría con `cron` (Linux) o el Programador de tareas (Windows).
 
-**Dependencias con versión fija.** Los `requirements.txt` usan `==` para que cada instalación sea idéntica a la probada y no se incorpore sin control una versión incompatible o comprometida. `werkzeug` se declara aunque Flask lo instala, porque la API lo importa directamente, y `pytest` va en un archivo aparte para no instalarlo en la imagen de producción.
+**Dependencias con versión fija.** Los `requirements.txt` usan `==` para que cada instalación sea idéntica a la probada y no se incorpore sin control una versión incompatible o comprometida.
 
 ## Tests y CI
 
-La suite de `pytest` (40 casos) cubre cada endpoint, todos los códigos de error, path traversal, SQL injection, el rollback ante fallas de la base y la escritura concurrente desde varios procesos. El detalle de cada test está en [`api/tests/README.md`](api/tests/README.md).
+La suite de `pytest` (41 casos) cubre cada endpoint, todos los códigos de error, path traversal, SQL injection, el rollback ante fallas de la base y la escritura concurrente desde varios procesos. El detalle de cada test está en [`api/tests/README.md`](api/tests/README.md).
 
 GitHub Actions (`.github/workflows/ci.yml`) la ejecuta en cada push y pull request, con permisos de solo lectura:
 - **Tests en Linux y Windows**, porque el agente es multiplataforma. Esta matriz detectó un error con IPv6 que solo ocurría en Windows.
@@ -206,10 +211,14 @@ GitHub Actions (`.github/workflows/ci.yml`) la ejecuta en cada push y pull reque
 - **Validación de entrada:** la IP se valida con `ipaddress`, lo que además previene path traversal (la IP forma parte del nombre del archivo). También se validan campos obligatorios, tipos y formato de fecha.
 - **Consultas SQL parametrizadas**, porque los nombres de procesos y usuarios los controla cualquiera con acceso al servidor relevado.
 - **Datos mínimos** y **errores sin detalles internos** hacia el cliente.
-- **Contenedor sin root:** la API corre con un usuario sin privilegios (uid 1000, configurable con `APP_UID`/`APP_GID` para que coincida con el dueño de `data/` en Linux). Si se explotara una falla, el atacante quedaría limitado a escribir en `data/`.
+- **Contenedor sin root:** la API no corre como administrador (root) sino con un usuario sin privilegios, que solo puede escribir en la carpeta `data/`. Si alguien aprovechara una falla de la API para ejecutar código, tendría esos mismos permisos limitados y no podría modificar el resto del sistema.
 - **Secretos fuera del código:** el token se configura por variable de entorno y `.env` está excluido de git. El agente lo toma de `AGENT_TOKEN`, porque pasarlo con `--token` lo deja visible en la lista de procesos y en el historial de la terminal.
 
-### Relación con el OWASP Top 10:2025
+### Relación con OWASP
+
+La solución se contrasta con dos listados de OWASP: el **Top 10:2025**, de riesgos en aplicaciones web en general, y el **API Security Top 10:2023**, específico para APIs.
+
+**OWASP Top 10:2025**
 
 | Riesgo | Cómo se aborda |
 |---|---|
@@ -221,9 +230,23 @@ GitHub Actions (`.github/workflows/ci.yml`) la ejecuta en cada push y pull reque
 | **A07 Authentication Failures** | Comparación en tiempo constante. **Pendiente:** token único compartido |
 | **A10 Mishandling of Exceptional Conditions** | Manejo centralizado de errores y transacción con rollback |
 
+**OWASP API Security Top 10:2023**
+
+| Riesgo | Cómo se aborda |
+|---|---|
+| **API1 Broken Object Level Authorization** | **Pendiente:** con el token compartido, cualquier agente puede consultar los datos de cualquier IP |
+| **API2 Broken Authentication** | Token comparado en tiempo constante. **Pendiente:** token único compartido y tráfico sin cifrar |
+| **API3 Broken Object Property Level Authorization** | La API descarta los campos no esperados y solo guarda y devuelve los definidos |
+| **API4 Unrestricted Resource Consumption** | Límite de 5 MB por request. **Pendiente:** rate limiting |
+| **API5 Broken Function Level Authorization** | **Pendiente:** el mismo token habilita enviar y consultar |
+| **API8 Security Misconfiguration** | Sin `AGENT_TOKEN` la API no atiende; contenedor sin root; errores sin detalles internos |
+| **API9 Improper Inventory Management** | Endpoints versionados (`/api/v1`) y documentados |
+
 ### Riesgos conocidos
 
-**Tráfico sin cifrar.** La API atiende en HTTP, así que el token puede ser interceptado en la red. Es la primera mejora a aplicar, porque sin cifrado ninguna credencial está protegida: servir la API por HTTPS mediante un *reverse proxy* (Caddy, Nginx) o certificados en gunicorn. En producción, con un certificado de la **CA interna** de la organización, que se puede renovar o revocar sin redistribuir nada; uno autofirmado solo sirve para pruebas, porque obliga a copiarlo a cada agente.
+**Tráfico sin cifrar.** La API atiende en HTTP, así que el token puede ser interceptado en la red. Es la primera mejora a aplicar, porque sin cifrado ninguna credencial está protegida: servir la API por HTTPS.
+
+Para eso hace falta un certificado. En producción conviene uno emitido por la **CA interna** de la organización: los agentes ya confían en esa autoridad, así que el certificado se puede renovar o revocar sin tocar cada servidor. Un certificado **autofirmado** no lo respalda ninguna autoridad, por lo que cada agente tiene que tener una copia para confiar en él, y cada renovación o revocación obliga a redistribuirlo a todos los servidores. Por eso solo es práctico para pruebas.
 
 **Token único compartido.** Todos los agentes usan el mismo token, que sirve tanto para enviar como para consultar: comprometer un servidor permitiría leer el inventario completo e inyectar datos a nombre de cualquier IP, y no se puede revocar un solo agente. La mitigación preferida es **mTLS**: cada agente con su propio certificado de la CA interna y permiso solo de escritura, y una credencial separada para consultas. Resuelve también el riesgo anterior.
 

@@ -242,17 +242,51 @@ def get_reports(ip):
     date = request.args.get("date")  # opcional: AAAA-MM-DD
     if date:
         date = valid_date(date)
-        files = [DATA_DIR / f"{file_prefix(ip)}_{date}.json"]
-        files = [f for f in files if f.exists()]
-    else:
-        files = sorted(DATA_DIR.glob(f"{file_prefix(ip)}_*.json"))
-    if not files:
+    with closing(db()) as conn:
+        reports = load_reports(conn, ip, date)
+    if not reports:
         detail = f" on {date}" if date else ""
         abort(404, f"No data for {ip}{detail}.")
     result = {}
-    for f in files:
-        result[f.stem.split("_", 1)[1]] = json.loads(f.read_text(encoding="utf-8"))
+    for r in reports:
+        result.setdefault(r["received_at"][:10], []).append(r)
     return jsonify({"ip": ip, "reports_by_date": result})
+
+
+def load_reports(conn, ip: str, date=None) -> list[dict]:
+    """Lee de la base los relevamientos de una IP (opcionalmente de un dia, en UTC)
+    y los arma con la misma forma con la que se guardan en el JSON."""
+    sql = """SELECT r.* FROM reports r JOIN servers s ON s.id = r.server_id
+             WHERE s.ip = ?"""
+    params = [ip]
+    if date:
+        sql += " AND substr(r.received_at, 1, 10) = ?"
+        params.append(date)
+    reports = []
+    for r in conn.execute(sql + " ORDER BY r.id", params).fetchall():
+        processes = conn.execute(
+            "SELECT pid, name FROM processes WHERE report_id=? ORDER BY id", (r["id"],))
+        sessions = conn.execute(
+            "SELECT username FROM sessions WHERE report_id=? ORDER BY id", (r["id"],))
+        reports.append({
+            "ip": ip,
+            "received_at": r["received_at"],
+            "source_addr": r["source_addr"],
+            "os_name": r["os_name"],
+            "os_version": r["os_version"],
+            "os_release": r["os_release"],
+            "cpu": {
+                "model": r["cpu_model"],
+                "architecture": r["cpu_arch"],
+                "physical_cores": r["cpu_physical_cores"],
+                "logical_cores": r["cpu_logical_cores"],
+                "max_frequency_mhz": r["cpu_max_mhz"],
+                "usage_percent": r["cpu_usage_percent"],
+            },
+            "processes": [{"pid": p["pid"], "name": p["name"]} for p in processes],
+            "users": [{"name": s["username"]} for s in sessions],
+        })
+    return reports
 
 
 def problem(status: int, title: str, detail: str):
