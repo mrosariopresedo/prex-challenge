@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Minimo privilegio: el workflow solo necesita leer el repositorio
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # El agente es multiplataforma: se valida en Linux y en Windows
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            api/requirements-dev.txt
+            agent/requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r api/requirements-dev.txt
+          pip install -r agent/requirements.txt
+
+      - name: Tests de la API
+        working-directory: api
+        run: pytest -v
+
+      - name: Relevamiento del agente (sin envio)
+        run: python agent/agent.py --dry-run
+
+  docker:
+    name: Docker de punta a punta
+    needs: tests
+    runs-on: ubuntu-latest
+    env:
+      AGENT_TOKEN: token-de-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Levantar la API
+        run: |
+          # El contenedor corre con el uid del runner, duenio de ./data
+          echo "APP_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "APP_GID=$(id -g)" >> "$GITHUB_ENV"
+          export APP_UID=$(id -u) APP_GID=$(id -g)
+          docker compose up -d --build
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:5000/health && exit 0
+            sleep 1
+          done
+          echo "La API no respondio a /health" && exit 1
+
+      - name: El agente envia un relevamiento real
+        run: |
+          pip install -r agent/requirements.txt
+          python agent/agent.py --api http://localhost:5000
+
+      - name: El relevamiento quedo guardado
+        run: |
+          ls data/*.json
+          test -f data/inventory.db
+
+      - name: Un token incorrecto es rechazado
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer incorrecto" http://localhost:5000/api/v1/reports)
+          echo "Codigo recibido: $code"
+          test "$code" = "401"
+
+      - name: Logs de la API
+        if: always()
+        run: docker compose logs api
+
+      - name: Bajar la API
+        if: always()
+        run: docker compose down
